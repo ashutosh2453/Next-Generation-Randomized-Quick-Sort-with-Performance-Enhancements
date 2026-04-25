@@ -1,0 +1,1023 @@
+NEXT-GENERATION RANDOMIZED QUICK SORT WITH PERFORMANCE ENHANCEMENTS
+===================================================================
+
+PSEUDOCODE DOCUMENTATION
+Version 2.0.0
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. HIGH-LEVEL ALGORITHM OVERVIEW
+2. MAIN QUICKSORT FUNCTION
+3. PIVOT SELECTION STRATEGIES
+4. PARTITIONING SCHEMES
+5. OPTIMIZATION TECHNIQUES
+6. FALLBACK ALGORITHMS
+7. ALGORITHM VARIANTS
+8. COMPLEXITY ANALYSIS
+9. PRACTICAL IMPLEMENTATION CONSIDERATIONS
+
+================================================================================
+1. HIGH-LEVEL ALGORITHM OVERVIEW
+================================================================================
+
+ALGORITHM: NextGenQuickSort
+
+PURPOSE:
+  Efficiently sort array using divide-and-conquer with multiple optimizations:
+  - Randomized pivot selection for probabilistic O(n log n) guarantee
+  - Three-way partitioning for duplicate handling
+  - Introsort fallback to prevent worst-case O(n²)
+  - Insertion sort for small subarrays
+  - Median-of-three for better pivot selection
+  - Tail call optimization to reduce stack space
+
+INPUT:
+  array: unsorted array of comparable elements
+  
+OUTPUT:
+  array: sorted in ascending order (in-place)
+
+CHARACTERISTICS:
+  Time Complexity: O(n log n) average, O(n log n) worst-case with introsort
+  Space Complexity: O(log n) auxiliary space
+  Stability: No (unstable sort)
+  In-place: Yes
+  Adaptive: No (performance independent of input order without special detection)
+
+================================================================================
+2. MAIN QUICKSORT FUNCTION
+================================================================================
+
+FUNCTION: QuickSort(array, config)
+
+INPUT:
+  array: List of elements to sort
+  config: Configuration object with:
+    - pivotStrategy: RANDOM | MEDIAN_OF_THREE | RANDOM_MEDIAN_HYBRID
+    - insertionThreshold: integer (typically 10-16)
+    - enableIntrosort: boolean
+    - enableThreeWay: boolean
+    - trackMetrics: boolean
+
+OUTPUT:
+  Sorted array
+
+ALGORITHM:
+BEGIN
+  // Validate input
+  IF array length <= 1 THEN
+    RETURN array
+  END IF
+  
+  // Create working copy (for non-destructive sorting)
+  result ← COPY(array)
+  
+  // Initialize metrics if tracking enabled
+  IF config.trackMetrics THEN
+    metrics ← NEW Metrics()
+    startTime ← CURRENT_TIME()
+  END IF
+  
+  // Calculate maximum recursion depth for introsort
+  IF config.enableIntrosort THEN
+    maxDepth ← 2 * CEIL(LOG₂(LENGTH(result)))
+  ELSE
+    maxDepth ← INFINITY
+  END IF
+  
+  // Start recursive sorting
+  CALL QuickSortRecursive(
+    result, 
+    left=0, 
+    right=LENGTH(result)-1, 
+    depth=0, 
+    maxDepth=maxDepth,
+    config=config,
+    metrics=metrics
+  )
+  
+  // Record metrics
+  IF config.trackMetrics THEN
+    metrics.elapsedTime ← CURRENT_TIME() - startTime
+    metrics.strategy ← config.pivotStrategy
+  END IF
+  
+  RETURN result
+END
+
+
+FUNCTION: QuickSortRecursive(array, left, right, depth, maxDepth, config, metrics)
+
+INPUT:
+  array: Array being sorted
+  left: Left boundary index
+  right: Right boundary index
+  depth: Current recursion depth
+  maxDepth: Maximum allowed recursion depth before fallback
+  config: Configuration parameters
+  metrics: Metrics tracking object
+
+ALGORITHM:
+BEGIN
+  // Update metrics
+  metrics.maxRecursionDepth ← MAX(metrics.maxRecursionDepth, depth)
+  
+  // Outer loop enables tail-call optimization
+  WHILE left < right DO
+    
+    // Optimization 1: Use insertion sort for small arrays
+    IF (right - left + 1) <= config.insertionThreshold THEN
+      CALL InsertionSort(array, left, right, metrics)
+      metrics.insertionSortUsed ← TRUE
+      BREAK
+    END IF
+    
+    // Optimization 2: Switch to heap sort if recursion too deep
+    IF depth > maxDepth AND config.enableIntrosort THEN
+      CALL HeapSort(array, left, right+1, metrics)
+      metrics.heapSortUsed ← TRUE
+      BREAK
+    END IF
+    
+    // Select pivot element
+    pivotIndex ← CALL SelectPivot(
+      array, 
+      left, 
+      right, 
+      config.pivotStrategy,
+      metrics
+    )
+    
+    // Partition array
+    IF config.enableThreeWay THEN
+      // Three-way partitioning for duplicates
+      (lt, gt) ← CALL ThreeWayPartition(
+        array, 
+        left, 
+        right, 
+        pivotIndex,
+        metrics
+      )
+      
+      // Recursive calls with tail optimization
+      IF (lt - left) < (right - gt) THEN
+        CALL QuickSortRecursive(
+          array, left, lt-1, depth+1, maxDepth, config, metrics
+        )
+        left ← gt + 1  // Tail call optimization
+      ELSE
+        CALL QuickSortRecursive(
+          array, gt+1, right, depth+1, maxDepth, config, metrics
+        )
+        right ← lt - 1  // Tail call optimization
+      END IF
+      
+    ELSE
+      // Two-way partitioning
+      mid ← CALL TwoWayPartition(
+        array, 
+        left, 
+        right, 
+        pivotIndex,
+        metrics
+      )
+      
+      // Recursive calls with tail optimization
+      IF (mid - left) < (right - mid) THEN
+        CALL QuickSortRecursive(
+          array, left, mid-1, depth+1, maxDepth, config, metrics
+        )
+        left ← mid + 1  // Tail call optimization
+      ELSE
+        CALL QuickSortRecursive(
+          array, mid+1, right, depth+1, maxDepth, config, metrics
+        )
+        right ← mid - 1  // Tail call optimization
+      END IF
+    END IF
+    
+  END WHILE
+  
+END
+
+
+================================================================================
+3. PIVOT SELECTION STRATEGIES
+================================================================================
+
+STRATEGY 1: RANDOM PIVOT SELECTION
+-----------------------------------
+
+FUNCTION: SelectPivotRandom(array, left, right)
+
+PURPOSE:
+  Select random element as pivot to probabilistically ensure O(n log n)
+  
+INPUT:
+  array: Array being sorted
+  left: Left boundary
+  right: Right boundary
+  
+OUTPUT:
+  Index of selected pivot
+  
+ALGORITHM:
+BEGIN
+  pivotIndex ← RANDOM_INTEGER(left, right)  // Inclusive range
+  RETURN pivotIndex
+END
+
+CHARACTERISTICS:
+  Time: O(1)
+  Probability of good split: ~high (expected value)
+  Best for: Random or adversarial input
+  Worst for: Already sorted sequences
+
+
+STRATEGY 2: MEDIAN-OF-THREE PIVOT SELECTION
+---------------------------------------------
+
+FUNCTION: SelectPivotMedianOfThree(array, left, right)
+
+PURPOSE:
+  Choose median of three elements (first, middle, last) as pivot
+  Avoids worst-case on partially sorted data
+  
+INPUT:
+  array: Array being sorted
+  left: Left boundary
+  right: Right boundary
+  
+OUTPUT:
+  Index of median element among three candidates
+  
+ALGORITHM:
+BEGIN
+  mid ← (left + right) / 2  // Integer division
+  
+  // Find median of three indices: left, mid, right
+  medianIndex ← CALL MedianOfThreeIndices(
+    array, left, mid, right
+  )
+  
+  RETURN medianIndex
+END
+
+FUNCTION: MedianOfThreeIndices(array, i, j, k)
+
+PURPOSE:
+  Return index containing median value among three positions
+  
+ALGORITHM:
+BEGIN
+  a ← array[i]
+  b ← array[j]
+  c ← array[k]
+  
+  IF a <= b THEN
+    IF b <= c THEN
+      RETURN j           // a <= b <= c
+    ELSE IF a <= c THEN
+      RETURN k           // a <= c < b
+    ELSE
+      RETURN i           // c < a <= b
+    END IF
+  ELSE
+    IF a <= c THEN
+      RETURN i           // b < a <= c
+    ELSE IF b <= c THEN
+      RETURN k           // b <= c < a
+    ELSE
+      RETURN j           // c < b < a
+    END IF
+  END IF
+END
+
+CHARACTERISTICS:
+  Time: O(1) - constant 3 comparisons
+  Best for: Partially sorted or adversarial input
+  Worst for: Random input (slightly higher overhead)
+  Reduces: Probability of O(n²) behavior on nearly-sorted data
+
+
+STRATEGY 3: RANDOM-MEDIAN HYBRID
+---------------------------------
+
+FUNCTION: SelectPivotRandomMedianHybrid(array, left, right)
+
+PURPOSE:
+  Combine benefits of random and median-of-three:
+  - Randomness provides probabilistic guarantees
+  - Median-of-three improves partition quality
+  
+ALGORITHM:
+BEGIN
+  // Select three random indices
+  candidates ← [left, (left+right)/2, right]
+  
+  // Shuffle candidates for randomness
+  SHUFFLE(candidates)
+  
+  // Find median of random candidates
+  medianIndex ← CALL MedianOfThreeIndices(
+    array, 
+    candidates[0], 
+    candidates[1], 
+    candidates[2]
+  )
+  
+  RETURN medianIndex
+END
+
+CHARACTERISTICS:
+  Time: O(1) + shuffling overhead
+  Combines benefits of both strategies
+  Very robust for diverse input patterns
+
+
+FUNCTION: SelectPivot(array, left, right, strategy)
+
+PURPOSE:
+  Dispatch to appropriate pivot selection strategy
+  
+ALGORITHM:
+BEGIN
+  SWITCH strategy:
+    CASE RANDOM:
+      RETURN SelectPivotRandom(array, left, right)
+    CASE MEDIAN_OF_THREE:
+      RETURN SelectPivotMedianOfThree(array, left, right)
+    CASE RANDOM_MEDIAN_HYBRID:
+      RETURN SelectPivotRandomMedianHybrid(array, left, right)
+    DEFAULT:
+      RETURN SelectPivotRandom(array, left, right)
+  END SWITCH
+END
+
+
+================================================================================
+4. PARTITIONING SCHEMES
+================================================================================
+
+SCHEME 1: TWO-WAY PARTITIONING (HOARE'S SCHEME)
+-----------------------------------------------
+
+FUNCTION: TwoWayPartition(array, left, right, pivotIndex, metrics)
+
+PURPOSE:
+  Partition array into two regions:
+  - Elements < pivot
+  - Elements >= pivot
+  Efficient for unique or mostly-unique elements
+  
+INPUT:
+  array: Array being partitioned
+  left: Left boundary
+  right: Right boundary
+  pivotIndex: Index of pivot element
+  metrics: Metrics tracking object
+  
+OUTPUT:
+  Index where pivot element ends up
+  
+ALGORITHM:
+BEGIN
+  // Move pivot to end for convenience
+  SWAP(array, pivotIndex, right)
+  pivotValue ← array[right]
+  
+  // Standard Hoare partition
+  i ← left - 1
+  
+  FOR j FROM left TO right-1 DO
+    metrics.comparisons ← metrics.comparisons + 1
+    
+    IF array[j] < pivotValue THEN
+      i ← i + 1
+      SWAP(array, i, j)
+      metrics.swaps ← metrics.swaps + 1
+    END IF
+  END FOR
+  
+  // Place pivot in final position
+  SWAP(array, i+1, right)
+  metrics.swaps ← metrics.swaps + 1
+  
+  RETURN i + 1
+END
+
+CHARACTERISTICS:
+  Time: O(n) - linear scan
+  Comparisons: Exactly (right - left)
+  Swaps: ~n/2 on average
+  Best for: Unique elements
+  Cache-friendly: Yes (linear scan pattern)
+
+
+SCHEME 2: THREE-WAY PARTITIONING (DIJKSTRA'S SCHEME)
+-----------------------------------------------------
+
+FUNCTION: ThreeWayPartition(array, left, right, pivotIndex, metrics)
+
+PURPOSE:
+  Partition array into three regions:
+  - Elements < pivot (region [left, lt-1])
+  - Elements = pivot (region [lt, gt])
+  - Elements > pivot (region [gt+1, right])
+  Optimal for arrays with many duplicate elements
+  
+INPUT:
+  array: Array being partitioned
+  left: Left boundary
+  right: Right boundary
+  pivotIndex: Index of pivot element
+  metrics: Metrics tracking object
+  
+OUTPUT:
+  Tuple (lt, gt) defining boundaries of equal region
+  
+ALGORITHM:
+BEGIN
+  // Move pivot to left
+  SWAP(array, pivotIndex, left)
+  metrics.swaps ← metrics.swaps + 1
+  
+  pivotValue ← array[left]
+  
+  // Initialize pointers
+  lt ← left          // Right boundary of < region
+  gt ← right         // Left boundary of > region
+  i ← left + 1       // Current element being examined
+  
+  // Three-way partition loop
+  WHILE i <= gt DO
+    metrics.comparisons ← metrics.comparisons + 1
+    
+    IF array[i] < pivotValue THEN
+      // Move to < region
+      SWAP(array, lt, i)
+      metrics.swaps ← metrics.swaps + 1
+      lt ← lt + 1
+      i ← i + 1
+      
+    ELSE IF array[i] > pivotValue THEN
+      // Move to > region
+      SWAP(array, i, gt)
+      metrics.swaps ← metrics.swaps + 1
+      gt ← gt - 1
+      
+      // Don't increment i; need to check swapped element
+      
+    ELSE
+      // Equal to pivot; already in correct region
+      i ← i + 1
+    END IF
+  END WHILE
+  
+  RETURN (lt, gt)
+END
+
+CHARACTERISTICS:
+  Time: O(n) - single pass with 3-way comparisons
+  Comparisons: Exactly (right - left)
+  Swaps: Similar to two-way, but optimal for duplicates
+  Best for: Arrays with many duplicate values
+  Worst for: Unique elements (same as two-way)
+  
+EXAMPLE:
+  Input array: [5, 2, 8, 2, 9, 1, 5, 5, 2]
+  Pivot value: 5
+  
+  After partition:
+  [2, 2, 1, 2] [5, 5, 5] [8, 9]
+                 ↑       ↑
+                lt      gt
+  
+  Returns: (lt=3, gt=5)
+
+
+================================================================================
+5. OPTIMIZATION TECHNIQUES
+================================================================================
+
+OPTIMIZATION 1: INSERTION SORT FOR SMALL ARRAYS
+-----------------------------------------------
+
+FUNCTION: InsertionSort(array, left, right, metrics)
+
+PURPOSE:
+  Sort small arrays using insertion sort
+  Avoids recursive overhead for small subarrays
+  Better cache locality than quicksort
+  
+INPUT:
+  array: Array being sorted
+  left: Left boundary
+  right: Right boundary
+  metrics: Metrics tracking
+  
+ALGORITHM:
+BEGIN
+  // Standard insertion sort
+  FOR i FROM left+1 TO right DO
+    item ← array[i]
+    j ← i - 1
+    
+    // Shift larger elements right
+    WHILE j >= left DO
+      metrics.comparisons ← metrics.comparisons + 1
+      
+      IF array[j] <= item THEN
+        BREAK
+      END IF
+      
+      array[j+1] ← array[j]
+      metrics.swaps ← metrics.swaps + 1
+      j ← j - 1
+    END WHILE
+    
+    array[j+1] ← item
+    metrics.swaps ← metrics.swaps + 1
+  END FOR
+END
+
+CHARACTERISTICS:
+  Time: O(n²) worst case, but only on small n
+  Actual cost: Very low for n ≤ 10-20
+  Cache-friendly: Excellent (small working set)
+  Stable: Yes
+  
+TYPICAL THRESHOLD:
+  10-16 elements, depending on CPU cache characteristics
+
+
+OPTIMIZATION 2: INTROSORT (INTROSPECTIVE SORT)
+-----------------------------------------------
+
+FUNCTION: IntrosortFallback(array, left, right, depth, maxDepth, metrics)
+
+PURPOSE:
+  Prevent O(n²) worst-case by monitoring recursion depth
+  Switch to heap sort if depth exceeds limit
+  Guarantees O(n log n) worst case
+  
+ALGORITHM:
+BEGIN
+  IF depth > maxDepth THEN
+    CALL HeapSort(array, left, right+1, metrics)
+    metrics.heapSortUsed ← TRUE
+  ELSE
+    CALL QuickSortRecursive(array, left, right, depth, maxDepth, ...)
+  END IF
+END
+
+MAXIMUM DEPTH CALCULATION:
+  maxDepth = 2 × CEIL(LOG₂(length))
+  
+RATIONALE:
+  - Expected recursion depth: ~LOG₂(n) for balanced partitions
+  - 2× provides ample buffer for mediocre partitions
+  - Beyond 2×LOG₂(n) indicates pathological input
+  - Switch to O(n log n) guaranteed heap sort
+
+EXAMPLE:
+  For n = 1,000,000:
+    LOG₂(1,000,000) ≈ 19.93
+    maxDepth = 2 × 20 = 40
+    
+  If actual depth exceeds 40, switch to heap sort
+
+
+OPTIMIZATION 3: TAIL CALL OPTIMIZATION
+---------------------------------------
+
+FUNCTION: RecursiveWithTailOptimization(array, left, right, ...)
+
+PURPOSE:
+  Reduce stack space by sorting smaller partition first
+  Update boundaries instead of recursive call for larger partition
+  
+ALGORITHM:
+BEGIN
+  WHILE left < right DO
+    // ... partition logic ...
+    (or mid) ← partition result
+    
+    // Sort smaller partition first
+    IF (smaller partition size) < (larger partition size) THEN
+      CALL QuickSortRecursive(array, smaller_left, smaller_right, ...)
+      
+      // Update boundaries for larger partition
+      // This becomes next iteration of WHILE loop
+      left ← larger_left
+      right ← larger_right
+    ELSE
+      CALL QuickSortRecursive(array, larger_left, larger_right, ...)
+      left ← smaller_left
+      right ← smaller_right
+    END IF
+  END WHILE
+END
+
+BENEFIT:
+  Stack space: O(log n) instead of potential O(n)
+  
+EXAMPLE:
+  If partition creates regions of size 1000 and 100,000:
+  - Without optimization: Would recurse on 100,000 first
+  - With optimization: Recurse on 1,000, then iterate on 100,000
+  - Stack usage: log(1,000) + 1 level instead of log(100,000) levels
+
+
+================================================================================
+6. FALLBACK ALGORITHMS
+================================================================================
+
+ALGORITHM 1: HEAP SORT (for Introsort Fallback)
+-----------------------------------------------
+
+FUNCTION: HeapSort(array, left, right, metrics)
+
+PURPOSE:
+  Guarantee O(n log n) worst-case when quicksort recursion depth exceeded
+  
+INPUT:
+  array: Array being sorted
+  left: Left boundary
+  right: Right boundary (exclusive)
+  metrics: Metrics tracking
+  
+ALGORITHM:
+BEGIN
+  // Build max-heap
+  FOR i FROM (right - left - 2) / 2 DOWN TO 0 DO
+    CALL Heapify(array, i, right - left, left, metrics)
+  END FOR
+  
+  // Extract elements from heap
+  FOR i FROM (right - left - 1) DOWN TO 1 DO
+    // Largest element at root; move to end
+    SWAP(array, left, left + i)
+    metrics.swaps ← metrics.swaps + 1
+    
+    // Restore heap property
+    CALL Heapify(array, 0, i, left, metrics)
+  END FOR
+END
+
+FUNCTION: Heapify(array, index, heapSize, offset, metrics)
+
+PURPOSE:
+  Maintain max-heap property at given index
+  
+ALGORITHM:
+BEGIN
+  largest ← index
+  left_child ← 2 * index + 1
+  right_child ← 2 * index + 2
+  
+  // Check left child
+  IF left_child < heapSize THEN
+    metrics.comparisons ← metrics.comparisons + 1
+    IF array[offset + left_child] > array[offset + largest] THEN
+      largest ← left_child
+    END IF
+  END IF
+  
+  // Check right child
+  IF right_child < heapSize THEN
+    metrics.comparisons ← metrics.comparisons + 1
+    IF array[offset + right_child] > array[offset + largest] THEN
+      largest ← right_child
+    END IF
+  END IF
+  
+  // Recursively heapify if needed
+  IF largest != index THEN
+    SWAP(array, offset + index, offset + largest)
+    metrics.swaps ← metrics.swaps + 1
+    CALL Heapify(array, largest, heapSize, offset, metrics)
+  END IF
+END
+
+TIME COMPLEXITY:
+  Build heap: O(n)
+  Extract n elements: O(n log n)
+  Total: O(n log n)
+
+
+================================================================================
+7. ALGORITHM VARIANTS
+================================================================================
+
+VARIANT 1: PARALLEL QUICKSORT
+-----------------------------
+
+FUNCTION: ParallelQuickSort(array, left, right, depth, numThreads)
+
+PURPOSE:
+  Multi-threaded version for large arrays
+  
+ALGORITHM:
+BEGIN
+  IF (right - left) < PARALLEL_THRESHOLD OR numThreads <= 1 THEN
+    CALL QuickSortRecursive(array, left, right, depth, ...)
+  ELSE
+    mid ← CALL Partition(array, left, right)
+    
+    // Create threads for both partitions
+    thread1 ← SPAWN ParallelQuickSort(
+      array, left, mid-1, depth+1, numThreads/2
+    )
+    thread2 ← SPAWN ParallelQuickSort(
+      array, mid+1, right, depth+1, numThreads/2
+    )
+    
+    // Wait for both threads
+    JOIN(thread1)
+    JOIN(thread2)
+  END IF
+END
+
+THRESHOLD:
+  Typical: 10,000 elements per thread
+
+
+VARIANT 2: QUICKSORT WITH COUNTING SORT (Hybrid)
+-------------------------------------------------
+
+FUNCTION: HybridQuickCountingSort(array, left, right, depth)
+
+PURPOSE:
+  Use counting sort for integer arrays with limited range
+  
+ALGORITHM:
+BEGIN
+  IF (right - left) < 1000 THEN
+    // For small arrays, use standard quicksort
+    CALL QuickSortRecursive(array, left, right, depth, ...)
+  
+  ELSE IF ALL_VALUES_IN_RANGE(array[left...right], minVal, maxVal) 
+          AND (maxVal - minVal) < (right - left) THEN
+    // Use counting sort for limited range
+    CALL CountingSort(array, left, right, minVal, maxVal)
+  
+  ELSE
+    // Use standard quicksort
+    CALL QuickSortRecursive(array, left, right, depth, ...)
+  END IF
+END
+
+
+VARIANT 3: QUICKSORT WITH ADAPTIVE STRATEGY SELECTION
+------------------------------------------------------
+
+FUNCTION: AdaptiveQuickSort(array, left, right, depth, metrics)
+
+PURPOSE:
+  Automatically select pivot strategy based on data characteristics
+  
+ALGORITHM:
+BEGIN
+  // Analyze sample of array
+  sampleSize ← MIN(100, (right - left) / 10)
+  variance ← CALL AnalyzeSampleVariance(array, left, sampleSize)
+  
+  // Select strategy based on variance
+  IF variance < 0.1 THEN
+    // Low variance: many duplicates → use three-way partition
+    strategy ← THREE_WAY_PARTITION
+    pivotStrategy ← MEDIAN_OF_THREE
+    
+  ELSE IF variance > 0.9 THEN
+    // High variance: diverse elements → use random pivot
+    strategy ← TWO_WAY_PARTITION
+    pivotStrategy ← RANDOM
+    
+  ELSE
+    // Medium variance → balanced approach
+    strategy ← THREE_WAY_PARTITION
+    pivotStrategy ← RANDOM_MEDIAN_HYBRID
+  END IF
+  
+  CALL QuickSortRecursive(
+    array, left, right, depth, ...,
+    partitionStrategy=strategy,
+    pivotStrategy=pivotStrategy
+  )
+END
+
+
+================================================================================
+8. COMPLEXITY ANALYSIS
+================================================================================
+
+TIME COMPLEXITY ANALYSIS
+------------------------
+
+BEST CASE:
+  When: Pivot always splits array in half
+  Recurrence: T(n) = 2T(n/2) + O(n)
+  Solution: T(n) = O(n log n)
+  
+  Tree depth: log₂(n)
+  Work per level: n
+  Total: O(n log n)
+
+AVERAGE CASE:
+  When: Random pivot on random input
+  Probability of good split: > 1/2 (by probabilistic analysis)
+  Expected splits: log(n)
+  Expected work: O(n log n)
+  
+  More precisely:
+    E[T(n)] ≤ 2∑(k=0 to log n) cn = O(cn log n)
+
+WORST CASE (Without Introsort):
+  When: Always partitions 1 element vs (n-1) elements
+  Example: Already sorted array with smallest-first pivot selection
+  Recurrence: T(n) = T(n-1) + O(n) = O(n²)
+  
+WORST CASE (With Introsort):
+  When: Recursion depth exceeds 2log(n)
+  Action: Switch to heap sort
+  Result: O(n log n) guaranteed
+  
+  Proof:
+    - If depth never exceeds 2log(n): Balanced partitions → O(n log n)
+    - If depth exceeds 2log(n): Switch to O(n log n) heap sort
+    - Therefore: Always O(n log n)
+
+SPACE COMPLEXITY ANALYSIS
+--------------------------
+
+RECURSION STACK DEPTH:
+  
+  Without Tail Optimization:
+    Best: O(log n)
+    Worst: O(n) - degenerate case
+  
+  With Tail Optimization:
+    Best: O(log n)
+    Worst: O(log n) - guaranteed!
+    
+    Proof: Always recurse on smaller partition
+    Size of smaller partition: ≤ n/2
+    Depth bounded: log(n/2) + log(n/4) + ... = O(log n)
+
+AUXILIARY SPACE:
+  In-place sorting: O(1) working space
+  Metrics tracking: O(1) additional
+  Total: O(log n) for recursion stack + O(1) working
+
+COMPARISON COUNT
+----------------
+
+Average comparisons for different strategies:
+
+RANDOM PIVOT:
+  Average: ~1.38 × n × log₂(n)
+  
+MEDIAN-OF-THREE:
+  Average: ~0.9 × n × log₂(n)
+  Explanation: Better partitions mean faster convergence
+  
+THREE-WAY PARTITION:
+  Best case (all duplicates): O(n)
+  Average case: O(n log n)
+  Worst case: O(n log n)
+
+SWAPS
+-----
+
+Typically: ~n/2 swaps per level
+For k levels: ~(n/2) × k total swaps
+Average: ~(n/2) × log(n) swaps
+
+
+================================================================================
+9. PRACTICAL IMPLEMENTATION CONSIDERATIONS
+================================================================================
+
+PARAMETER TUNING
+----------------
+
+Insertion Sort Threshold:
+  Value: 10-16 elements
+  Finding optimal:
+    FOR threshold = 10 TO 20 DO
+      MEASURE performance on typical arrays
+      SELECT threshold with best performance
+    END FOR
+
+Maximum Recursion Depth (for Introsort):
+  Value: 2 × CEIL(LOG₂(length))
+  Why 2×?: Allows some unbalanced partitions while preventing O(n²)
+
+IMPLEMENTATION GUIDELINES
+--------------------------
+
+1. Use stable memory access patterns for cache efficiency
+   ✓ Sequential scans during partitioning
+   ✓ Avoid random jumps in memory
+
+2. Minimize function call overhead
+   ✓ Inline small functions where possible
+   ✓ Use iteration instead of recursion for small depths
+
+3. Track metrics for real-time monitoring
+   ✓ Comparison count
+   ✓ Swap count
+   ✓ Recursion depth
+   ✓ Execution time
+
+4. Test on diverse input patterns
+   ✓ Random arrays
+   ✓ Pre-sorted arrays
+   ✓ Reverse-sorted arrays
+   ✓ Arrays with duplicates
+   ✓ Nearly-sorted arrays
+
+PERFORMANCE OPTIMIZATION TECHNIQUES
+------------------------------------
+
+1. SIMD Optimization:
+   Use vectorized comparisons for numeric data
+   Compare multiple elements in parallel
+   
+2. Cache Blocking:
+   Process data in cache-friendly chunks
+   Reduces cache misses
+   
+3. Instruction-Level Parallelism:
+   Order comparisons to avoid data dependencies
+   Allows CPU to overlap instructions
+   
+4. Branch Prediction:
+   Minimize conditional branches in hot paths
+   Use pattern-friendly pivot selection
+   
+5. Memory Prefetching:
+   Hint CPU to prefetch data ahead of access
+   Reduces memory latency
+
+ERROR HANDLING
+--------------
+
+FUNCTION: ValidateInput(array)
+
+BEGIN
+  IF array is NULL THEN
+    RAISE NullPointerException
+  END IF
+  
+  IF LENGTH(array) < 0 THEN
+    RAISE InvalidArrayLengthException
+  END IF
+  
+  IF NOT all elements are comparable THEN
+    RAISE IncomparableElementsException
+  END IF
+END
+
+DEBUGGING STRATEGIES
+--------------------
+
+1. Add detailed logging at each level:
+   - Partition boundaries
+   - Pivot selection
+   - Strategy switches
+
+2. Validate output:
+   - Check array is sorted
+   - Verify no elements lost
+   - Ensure stability (if required)
+
+3. Profile critical sections:
+   - Partitioning function
+   - Comparison operations
+   - Memory access patterns
+
+4. Stress test edge cases:
+   - Empty arrays
+   - Single element
+   - All same elements
+   - Very large arrays
+
+
+================================================================================
+END OF PSEUDOCODE DOCUMENTATION
+================================================================================
+
+Key Takeaways:
+1. Main optimization: Randomized pivot provides O(n log n) average guarantee
+2. Safety optimization: Introsort prevents O(n²) worst case
+3. Practical optimization: Small-array threshold reduces overhead
+4. Memory optimization: Tail recursion keeps space O(log n)
+5. Adaptive optimization: Multiple strategies suit different data patterns
+
+This pseudocode provides the foundation for implementing a production-grade
+quick sort algorithm suitable for diverse real-world applications.
+
